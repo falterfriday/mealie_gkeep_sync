@@ -165,12 +165,50 @@ jobs:
     name: Helm chart
     runs-on: ubuntu-latest
     env:
-      CHART: deploy/mealie-gkeep-sync
-      CI_VALUES: deploy/mealie-gkeep-sync/ci/test-values.yaml
+      CHART: charts/mealie-gkeep-sync
+      CI_VALUES: charts/mealie-gkeep-sync/ci/test-values.yaml
     steps:
       - uses: actions/checkout@v7
+        with:
+          # Needed to diff this PR against its base for the version check below.
+          fetch-depth: 0
 
       - uses: azure/setup-helm@v5.0.1
+
+      - name: Chart changes require a Chart.yaml version bump
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          # chart-releaser publishes a chart version once and then skips it forever.
+          # Without this gate, changing a template without bumping the version merges
+          # cleanly, publishes nothing, and gives no error anywhere.
+          if git diff --quiet "$BASE_SHA" HEAD -- charts/; then
+            echo "No chart changes in this PR."
+            exit 0
+          fi
+
+          file="$CHART/Chart.yaml"
+          new_version="$(grep -E '^version:' "$file" | awk '{print $2}')"
+          old_version="$(git show "$BASE_SHA:$file" 2>/dev/null | grep -E '^version:' | awk '{print $2}' || true)"
+
+          if [ -z "$old_version" ]; then
+            echo "New chart at ${file} (version ${new_version}); nothing to compare."
+            exit 0
+          fi
+
+          if [ "$old_version" = "$new_version" ]; then
+            echo "::error file=${file}::charts/ changed but the chart version is still ${new_version}. Bump it, or chart-releaser will publish nothing."
+            exit 1
+          fi
+
+          highest="$(printf '%s\n%s\n' "$old_version" "$new_version" | sort -V | tail -1)"
+          if [ "$highest" != "$new_version" ]; then
+            echo "::error file=${file}::Chart version moved backwards: ${old_version} -> ${new_version}."
+            exit 1
+          fi
+
+          echo "Chart version ${old_version} -> ${new_version}"
 
       - name: Lint
         run: helm lint "$CHART" --values "$CI_VALUES"

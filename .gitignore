@@ -1,6 +1,5 @@
 # --- Secrets ---
 .env
-deploy/secret.yaml
 my-values.yaml
 values.local.yaml
 *-state.json

@@ -118,8 +118,8 @@ jobs:
         # nothing and silently report a clean pass.
         run: |
           mkdir -p /tmp/rendered
-          helm template mealie-gkeep-sync deploy/mealie-gkeep-sync \
-            --values deploy/mealie-gkeep-sync/ci/test-values.yaml \
+          helm template mealie-gkeep-sync charts/mealie-gkeep-sync \
+            --values charts/mealie-gkeep-sync/ci/test-values.yaml \
             > /tmp/rendered/manifests.yaml
           echo "rendered $(grep -c '^kind:' /tmp/rendered/manifests.yaml) objects"
 

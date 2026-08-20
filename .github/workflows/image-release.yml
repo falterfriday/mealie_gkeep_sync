@@ -1,0 +1,162 @@
+name: Publish image
+
+# Publishes the container image to GHCR.
+#
+#   push to main   -> :main and :sha-<short>, a moving edge build
+#   push tag vX.Y.Z -> :X.Y.Z, :X.Y and :latest
+#
+# No path filter: GitHub applies `paths` to tag pushes too, which can silently skip
+# a release. Rebuilding on every main push is cheap because the layer cache is warm.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: image-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build, scan, push, sign
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      # Keyless cosign signing exchanges this OIDC token for a short-lived certificate.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Tag must match the chart's appVersion
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          CHART_FILE: charts/mealie-gkeep-sync/Chart.yaml
+        run: |
+          # Runs before any build work, so a mismatch costs seconds rather than
+          # publishing an image version the chart does not reference. The chart's
+          # image.tag defaults to appVersion, so drift here means `helm install`
+          # silently pulls the wrong version.
+          tag_version="${GITHUB_REF_NAME#v}"
+          app_version="$(grep -E '^appVersion:' "$CHART_FILE" | awk '{print $2}' | tr -d '\042\047')"
+
+          if [ -z "$app_version" ]; then
+            echo "::error file=${CHART_FILE}::No appVersion found."
+            exit 1
+          fi
+
+          if [ "$tag_version" != "$app_version" ]; then
+            echo "::error file=${CHART_FILE}::Tag ${GITHUB_REF_NAME} publishes image ${tag_version}, but appVersion is ${app_version}. Update appVersion (and bump the chart version), then re-tag."
+            exit 1
+          fi
+
+          echo "Tag ${GITHUB_REF_NAME} matches appVersion ${app_version}."
+
+      - name: Resolve image name
+        id: image
+        # GHCR rejects uppercase, and repository owners may contain it.
+        run: |
+          owner="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
+          echo "name=ghcr.io/${owner}/mealie-gkeep-sync" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-qemu-action@v4.2.0
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Derive tags and labels
+        id: meta
+        uses: docker/metadata-action@v6.2.0
+        with:
+          images: ${{ steps.image.outputs.name }}
+          tags: |
+            type=ref,event=branch
+            type=sha,format=short,prefix=sha-
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+          flavor: |
+            latest=auto
+          labels: |
+            org.opencontainers.image.title=mealie-gkeep-sync
+            org.opencontainers.image.description=Bidirectional sync between a Mealie shopping list and a Google Keep list
+            org.opencontainers.image.licenses=MIT
+
+      # Scan before publishing, not after. A vulnerable image that is already pushed
+      # cannot be un-pushed, and consumers may have pulled it. This builds amd64 only
+      # and loads it locally; the multi-arch push below reuses the same cached layers.
+      - name: Build amd64 for scanning
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: scan-target:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Trivy gate
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: scan-target:${{ github.sha }}
+          severity: HIGH,CRITICAL
+          # Unfixed base-image CVEs would block every release with no action
+          # available. security.yml reports those on its weekly schedule.
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+          scanners: vuln
+
+      - name: Build and push
+        id: push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: mode=max
+          sbom: true
+
+      - uses: sigstore/cosign-installer@v4.1.2
+
+      - name: Sign the image
+        # Keyless: identity comes from the workflow's OIDC token, so there is no
+        # private key to store or rotate. Verify with:
+        #   cosign verify <image> \
+        #     --certificate-identity-regexp='^https://github.com/OWNER/REPO/' \
+        #     --certificate-oidc-issuer=https://token.actions.githubusercontent.com
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+          IMAGE: ${{ steps.image.outputs.name }}
+        run: cosign sign --yes "${IMAGE}@${DIGEST}"
+
+      - name: Summary
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+          DIGEST: ${{ steps.push.outputs.digest }}
+        run: |
+          {
+            echo "### Published"
+            echo
+            echo "Digest: \`${DIGEST}\`"
+            echo
+            echo "Tags:"
+            echo '```'
+            echo "${TAGS}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
