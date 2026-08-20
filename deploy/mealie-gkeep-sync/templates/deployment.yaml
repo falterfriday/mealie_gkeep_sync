@@ -1,0 +1,108 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "mealie-gkeep-sync.fullname" . }}
+  labels:
+    {{- include "mealie-gkeep-sync.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  strategy:
+    # Recreate, not RollingUpdate: the old pod must release the ReadWriteOnce PVC
+    # and stop syncing before the new one starts, or both write conflicting plans
+    # during the rollout.
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "mealie-gkeep-sync.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        # Roll the pod when configuration changes; without this a values change
+        # would update the ConfigMap while the running process kept stale settings.
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- if not .Values.secrets.existingSecret }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+        {{- end }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "mealie-gkeep-sync.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: sync
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "mealie-gkeep-sync.fullname" . }}
+            - secretRef:
+                name: {{ include "mealie-gkeep-sync.secretName" . }}
+          {{- with .Values.extraEnv }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          ports:
+            - name: health
+              containerPort: {{ .Values.health.port }}
+              protocol: TCP
+          # Liveness only asks "is the process up?". A rejected master token is
+          # deliberately not a liveness failure: restarting cannot fix credentials,
+          # and a CrashLoopBackOff would hide the logs that explain the problem.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            {{- toYaml .Values.livenessProbe | nindent 12 }}
+          # Readiness is what goes red when syncing is actually broken.
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            {{- toYaml .Values.readinessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          volumeMounts:
+            - name: state
+              mountPath: /data
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: state
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "mealie-gkeep-sync.pvcName" . }}
+          {{- else }}
+          # No persistence: a restart forces a full Keep resync and can resurrect
+          # items deleted while the pod was down.
+          emptyDir: {}
+          {{- end }}
+        # readOnlyRootFilesystem still needs a writable /tmp for the Python runtime.
+        - name: tmp
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

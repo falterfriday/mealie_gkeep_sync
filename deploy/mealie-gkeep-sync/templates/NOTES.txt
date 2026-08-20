@@ -1,0 +1,51 @@
+{{ .Chart.Name }} {{ .Chart.Version }} installed as release {{ .Release.Name }}.
+
+  Mealie list : {{ .Values.mealie.listId | default .Values.mealie.listName }}
+  Keep list   : {{ .Values.google.keepListName }}
+  Interval    : {{ .Values.sync.intervalSeconds }}s
+  Conflicts   : {{ .Values.sync.conflictStrategy }}
+{{- if .Values.secrets.existingSecret }}
+  Credentials : existing Secret {{ .Values.secrets.existingSecret }}
+{{- else }}
+  Credentials : Secret rendered by this chart
+{{- end }}
+
+{{- if eq (int .Values.replicaCount) 0 }}
+
+PAUSED: replicaCount is 0, so nothing is syncing. Set replicaCount=1 to resume.
+{{- end }}
+
+{{- if .Values.sync.dryRun }}
+
+DRY RUN is enabled. The pod logs the plan for both sides and writes nothing.
+Set sync.dryRun=false when the logged plan looks right.
+{{- else if not .Values.persistence.enabled }}
+
+WARNING: persistence is disabled, so sync state lives in an emptyDir. A restart
+forces a full Keep resync and can resurrect items deleted while the pod was down.
+{{- end }}
+
+{{- if not .Values.secrets.existingSecret }}
+
+NOTE: credentials were supplied through values, so they are stored in this
+release's manifest inside the cluster. GOOGLE_MASTER_TOKEN is password-equivalent
+access to the Google account. To avoid that, create the Secret yourself and set
+secrets.existingSecret:
+
+  kubectl -n {{ .Release.Namespace }} create secret generic {{ include "mealie-gkeep-sync.fullname" . }}-creds \
+    --from-literal=MEALIE_API_TOKEN='...' \
+    --from-literal=GOOGLE_MASTER_TOKEN='aas_et/...'
+{{- end }}
+
+Check that it is syncing:
+
+  kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "mealie-gkeep-sync.fullname" . }}
+  kubectl -n {{ .Release.Namespace }} logs -f deploy/{{ include "mealie-gkeep-sync.fullname" . }}
+
+Readiness reports why it is unhappy, if it is:
+
+  kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "mealie-gkeep-sync.fullname" . }} -- \
+    python -c "import urllib.request;print(urllib.request.urlopen('http://127.0.0.1:{{ .Values.health.port }}/readyz').read().decode())"
+
+A red readiness with the pod still Running is expected behaviour for bad
+credentials: restarting cannot fix them, so the pod stays up and inspectable.

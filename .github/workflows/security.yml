@@ -100,11 +100,34 @@ jobs:
           dockerfile: Dockerfile
           failure-threshold: warning
 
-      - name: Trivy config scan
+      - name: Trivy config scan (Dockerfile)
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: config
           scan-ref: .
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          format: table
+
+      - uses: azure/setup-helm@v5.0.1
+
+      - name: Render the Helm chart
+        # The chart is scanned as rendered output rather than in place. Trivy renders
+        # charts with their default values, and this chart deliberately fails then
+        # (it has no safe defaults for credentials), so an in-place scan would find
+        # nothing and silently report a clean pass.
+        run: |
+          mkdir -p /tmp/rendered
+          helm template mealie-gkeep-sync deploy/mealie-gkeep-sync \
+            --values deploy/mealie-gkeep-sync/ci/test-values.yaml \
+            > /tmp/rendered/manifests.yaml
+          echo "rendered $(grep -c '^kind:' /tmp/rendered/manifests.yaml) objects"
+
+      - name: Trivy config scan (rendered Kubernetes manifests)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: config
+          scan-ref: /tmp/rendered
           severity: HIGH,CRITICAL
           exit-code: "1"
           format: table
