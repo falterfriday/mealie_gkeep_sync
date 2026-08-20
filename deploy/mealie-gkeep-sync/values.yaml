@@ -1,0 +1,136 @@
+image:
+  repository: ghcr.io/REPLACE_ME/mealie-gkeep-sync
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+replicaCount: 1
+
+# --- Mealie -----------------------------------------------------------------
+mealie:
+  # Required. Root URL of the Mealie instance.
+  baseUrl: "http://mealie.mealie.svc.cluster.local:9000"
+  # Identify the target list by name, or set listId for an exact UUID match.
+  # One of the two is required; listId wins if both are set.
+  listName: "Groceries"
+  listId: ""
+  # Set false only for self-signed internal certificates.
+  verifySsl: true
+  timeoutSeconds: 30
+
+# --- Google Keep ------------------------------------------------------------
+google:
+  # Required. Account that owns the Keep list.
+  email: ""
+  # Required. Title of the Keep list to sync.
+  keepListName: "Groceries"
+  createListIfMissing: false
+
+# --- Sync behaviour ---------------------------------------------------------
+sync:
+  # Both sides require polling; Keep offers no webhooks.
+  intervalSeconds: 60
+  # newest | mealie | keep
+  conflictStrategy: newest
+  # Structure Keep-authored text through Mealie's own ingredient parser.
+  parseIngredients: true
+  parserMinConfidence: 0.6
+  # Leave false so shopping-list typos never create food records in Mealie.
+  createMissingFoods: false
+  # Set true for a read-only first run that logs the plan without writing.
+  # Strongly recommended before the first real sync, especially if both lists
+  # already have items, because the first sync unions them.
+  dryRun: false
+
+logging:
+  # DEBUG | INFO | WARNING | ERROR
+  level: INFO
+  # json | text
+  format: json
+
+# --- Credentials ------------------------------------------------------------
+# GOOGLE_MASTER_TOKEN is password-equivalent: it grants full access to the Google
+# account, not just Keep. Consider a dedicated Google account owning only the shared
+# shopping list. Generate it with tools/get_master_token.py.
+secrets:
+  # Recommended: reference a Secret you created out of band, so no credential ever
+  # passes through values.yaml or your Helm release history.
+  #   kubectl create secret generic mealie-gkeep-sync \
+  #     --from-literal=MEALIE_API_TOKEN='...' \
+  #     --from-literal=GOOGLE_MASTER_TOKEN='aas_et/...'
+  # It must contain keys MEALIE_API_TOKEN and GOOGLE_MASTER_TOKEN.
+  existingSecret: ""
+
+  # Used only when existingSecret is empty. Values supplied here end up in the
+  # release manifest stored in-cluster, so prefer existingSecret in production.
+  mealieApiToken: ""
+  googleMasterToken: ""
+
+# --- State volume -----------------------------------------------------------
+# Holds the ID links, merge base, and gkeepapi's node cache. Losing it is
+# recoverable (links rebuild from Mealie's extras) but forces a full Keep resync
+# and can resurrect items deleted while it was gone.
+persistence:
+  enabled: true
+  # Reuse a PVC you manage yourself instead of letting the chart create one.
+  existingClaim: ""
+  storageClass: ""
+  accessMode: ReadWriteOnce
+  size: 128Mi
+  annotations: {}
+  # Keep the PVC when the release is uninstalled.
+  retain: false
+
+health:
+  port: 8080
+
+# Liveness only asks "is the process up?". A rejected master token is deliberately
+# NOT a liveness failure: restarting cannot fix credentials, and a CrashLoopBackOff
+# would hide the logs that explain the problem.
+livenessProbe:
+  initialDelaySeconds: 15
+  periodSeconds: 30
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+# Readiness is what goes red when syncing is actually broken.
+readinessProbe:
+  initialDelaySeconds: 20
+  periodSeconds: 30
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 96Mi
+  limits:
+    memory: 256Mi
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+extraEnv: []
+# - name: SOME_NEW_FLAG
+#   value: "true"
+
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+priorityClassName: ""

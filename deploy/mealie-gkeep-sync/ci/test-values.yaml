@@ -1,0 +1,12 @@
+# Dummy values so `helm lint` and `helm template` can render the chart.
+# The chart deliberately has no safe defaults for credentials or account identity,
+# so rendering with stock values.yaml fails by design.
+mealie:
+  baseUrl: http://mealie.mealie.svc.cluster.local:9000
+  listName: Groceries
+google:
+  email: ci@example.invalid
+  keepListName: Groceries
+secrets:
+  mealieApiToken: ci-fake-token
+  googleMasterToken: aas_et/ci-fake-token

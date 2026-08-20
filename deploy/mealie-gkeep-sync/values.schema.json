@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "mealie-gkeep-sync values",
+  "type": "object",
+  "properties": {
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repository": { "type": "string", "minLength": 1 },
+        "tag": { "type": ["string", "null"] },
+        "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
+      }
+    },
+    "imagePullSecrets": { "type": "array" },
+    "nameOverride": { "type": ["string", "null"] },
+    "fullnameOverride": { "type": ["string", "null"] },
+    "replicaCount": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Concurrent syncers race on the same list pair and state volume. 0 pauses syncing."
+    },
+    "mealie": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "baseUrl": { "type": "string" },
+        "listName": { "type": ["string", "null"] },
+        "listId": { "type": ["string", "null"] },
+        "verifySsl": { "type": "boolean" },
+        "timeoutSeconds": { "type": "number", "exclusiveMinimum": 0 }
+      }
+    },
+    "google": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "email": { "type": "string" },
+        "keepListName": { "type": "string" },
+        "createListIfMissing": { "type": "boolean" }
+      }
+    },
+    "sync": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "intervalSeconds": { "type": "number", "exclusiveMinimum": 0 },
+        "conflictStrategy": { "type": "string", "enum": ["newest", "mealie", "keep"] },
+        "parseIngredients": { "type": "boolean" },
+        "parserMinConfidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "createMissingFoods": { "type": "boolean" },
+        "dryRun": { "type": "boolean" }
+      }
+    },
+    "logging": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "level": { "type": "string", "enum": ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] },
+        "format": { "type": "string", "enum": ["json", "text"] }
+      }
+    },
+    "secrets": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "existingSecret": { "type": ["string", "null"] },
+        "mealieApiToken": { "type": ["string", "null"] },
+        "googleMasterToken": { "type": ["string", "null"] }
+      }
+    },
+    "persistence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "existingClaim": { "type": ["string", "null"] },
+        "storageClass": { "type": ["string", "null"] },
+        "accessMode": {
+          "type": "string",
+          "enum": ["ReadWriteOnce", "ReadWriteOncePod", "ReadWriteMany"]
+        },
+        "size": { "type": "string" },
+        "annotations": { "type": "object" },
+        "retain": { "type": "boolean" }
+      }
+    },
+    "health": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+      }
+    },
+    "livenessProbe": { "type": "object" },
+    "readinessProbe": { "type": "object" },
+    "resources": { "type": "object" },
+    "podSecurityContext": { "type": "object" },
+    "securityContext": { "type": "object" },
+    "extraEnv": { "type": "array" },
+    "podAnnotations": { "type": "object" },
+    "podLabels": { "type": "object" },
+    "nodeSelector": { "type": "object" },
+    "tolerations": { "type": "array" },
+    "affinity": { "type": "object" },
+    "priorityClassName": { "type": ["string", "null"] }
+  }
+}

@@ -1,0 +1,37 @@
+{{- include "mealie-gkeep-sync.validate" . -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "mealie-gkeep-sync.fullname" . }}
+  labels:
+    {{- include "mealie-gkeep-sync.labels" . | nindent 4 }}
+data:
+  # --- Mealie ---
+  MEALIE_BASE_URL: {{ .Values.mealie.baseUrl | quote }}
+  {{- if .Values.mealie.listId }}
+  MEALIE_LIST_ID: {{ .Values.mealie.listId | quote }}
+  {{- end }}
+  {{- if .Values.mealie.listName }}
+  MEALIE_LIST_NAME: {{ .Values.mealie.listName | quote }}
+  {{- end }}
+  MEALIE_VERIFY_SSL: {{ .Values.mealie.verifySsl | quote }}
+  MEALIE_TIMEOUT_SECONDS: {{ .Values.mealie.timeoutSeconds | quote }}
+
+  # --- Google Keep ---
+  GOOGLE_EMAIL: {{ .Values.google.email | quote }}
+  KEEP_LIST_NAME: {{ .Values.google.keepListName | quote }}
+  KEEP_CREATE_LIST_IF_MISSING: {{ .Values.google.createListIfMissing | quote }}
+
+  # --- Sync behaviour ---
+  SYNC_INTERVAL_SECONDS: {{ .Values.sync.intervalSeconds | quote }}
+  CONFLICT_STRATEGY: {{ .Values.sync.conflictStrategy | quote }}
+  PARSE_INGREDIENTS: {{ .Values.sync.parseIngredients | quote }}
+  PARSER_MIN_CONFIDENCE: {{ .Values.sync.parserMinConfidence | quote }}
+  CREATE_MISSING_FOODS: {{ .Values.sync.createMissingFoods | quote }}
+  DRY_RUN: {{ .Values.sync.dryRun | quote }}
+
+  # --- Operational ---
+  STATE_DIR: "/data"
+  HEALTH_PORT: {{ .Values.health.port | quote }}
+  LOG_LEVEL: {{ .Values.logging.level | quote }}
+  LOG_FORMAT: {{ .Values.logging.format | quote }}

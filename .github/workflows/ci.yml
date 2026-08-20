@@ -160,3 +160,85 @@ jobs:
       - name: Cleanup
         if: always()
         run: docker rm -f smoke 2>/dev/null || true
+
+  chart:
+    name: Helm chart
+    runs-on: ubuntu-latest
+    env:
+      CHART: deploy/mealie-gkeep-sync
+      CI_VALUES: deploy/mealie-gkeep-sync/ci/test-values.yaml
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: azure/setup-helm@v5.0.1
+
+      - name: Lint
+        run: helm lint "$CHART" --values "$CI_VALUES"
+
+      - name: Render
+        run: |
+          helm template mealie-gkeep-sync "$CHART" --values "$CI_VALUES" > /tmp/rendered.yaml
+          echo "rendered $(grep -c '^kind:' /tmp/rendered.yaml) objects"
+          cat /tmp/rendered.yaml
+
+      - name: Validate against Kubernetes API schemas
+        run: |
+          docker run --rm -i ghcr.io/yannh/kubeconform:latest \
+            -strict -summary -kubernetes-version 1.31.0 - < /tmp/rendered.yaml
+
+      - name: Rendered Deployment preserves the operational invariants
+        run: |
+          # These are not style preferences. Recreate + a single replica is what stops
+          # two syncers racing on one list pair and one ReadWriteOnce volume.
+          python - <<'PY'
+          import yaml
+          docs = [d for d in yaml.safe_load_all(open("/tmp/rendered.yaml")) if d]
+          dep = next(d for d in docs if d["kind"] == "Deployment")
+          spec = dep["spec"]
+          container = spec["template"]["spec"]["containers"][0]
+          assert spec["replicas"] == 1, spec["replicas"]
+          assert spec["strategy"]["type"] == "Recreate", spec["strategy"]
+          assert container["securityContext"]["readOnlyRootFilesystem"] is True
+          assert container["securityContext"]["allowPrivilegeEscalation"] is False
+          assert spec["template"]["spec"]["securityContext"]["runAsNonRoot"] is True
+          assert container["livenessProbe"]["httpGet"]["path"] == "/healthz"
+          assert container["readinessProbe"]["httpGet"]["path"] == "/readyz"
+          mounts = {m["name"]: m["mountPath"] for m in container["volumeMounts"]}
+          assert mounts == {"state": "/data", "tmp": "/tmp"}, mounts
+          annotations = spec["template"]["metadata"]["annotations"]
+          assert "checksum/config" in annotations, "config changes must roll the pod"
+          print("all invariants hold")
+          PY
+
+      - name: Guard rails reject unsafe or incomplete values
+        run: |
+          must_fail() {
+            desc="$1"; shift
+            if helm template guard "$CHART" "$@" >/dev/null 2>&1; then
+              echo "::error::chart accepted a configuration it should reject: ${desc}"
+              exit 1
+            fi
+            echo "  rejected: ${desc}"
+          }
+          must_fail "replicaCount above 1"   --values "$CI_VALUES" --set replicaCount=2
+          must_fail "missing credentials"    --set mealie.baseUrl=http://m --set google.email=a@b.c
+          must_fail "no list id or name"     --values "$CI_VALUES" --set mealie.listName=null
+          must_fail "empty mealie.baseUrl"   --values "$CI_VALUES" --set mealie.baseUrl=""
+          must_fail "unknown conflict rule"  --values "$CI_VALUES" --set sync.conflictStrategy=bogus
+          must_fail "misspelled value key"   --values "$CI_VALUES" --set mealie.baseURL=http://typo
+
+      - name: Supported configurations still render
+        run: |
+          must_render() {
+            desc="$1"; shift
+            if ! helm template ok "$CHART" "$@" >/dev/null 2>&1; then
+              echo "::error::chart rejected a supported configuration: ${desc}"
+              exit 1
+            fi
+            echo "  rendered: ${desc}"
+          }
+          must_render "replicaCount=0 (paused)"  --values "$CI_VALUES" --set replicaCount=0
+          must_render "existing secret"          --values "$CI_VALUES" --set secrets.existingSecret=creds
+          must_render "existing claim"           --values "$CI_VALUES" --set persistence.existingClaim=pvc
+          must_render "persistence disabled"     --values "$CI_VALUES" --set persistence.enabled=false
+          must_render "list by id"               --values "$CI_VALUES" --set mealie.listId=abc-123

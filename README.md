@@ -121,47 +121,77 @@ python tools/get_master_token.py you@gmail.com
 Follow the prompts (the script explains where to find the `oauth_token` cookie). The
 result starts with `aas_et/`.
 
-### 3. Configure and deploy
+### 3. Deploy the Helm chart
+
+The chart lives at `deploy/mealie-gkeep-sync`. Create the Secret out of band so no
+credential passes through values or your release history:
 
 ```bash
-cp deploy/secret.example.yaml deploy/secret.yaml
-# fill in MEALIE_API_TOKEN and GOOGLE_MASTER_TOKEN
-$EDITOR deploy/configmap.yaml      # list names, Mealie URL
-$EDITOR deploy/kustomization.yaml  # your image reference
-
-kubectl apply -k deploy/
+kubectl create secret generic mealie-gkeep-sync-creds \
+  --from-literal=MEALIE_API_TOKEN='...' \
+  --from-literal=GOOGLE_MASTER_TOKEN='aas_et/...'
 ```
 
-**Do a dry run first.** Set `DRY_RUN: "true"` in the ConfigMap, apply, and read the logs:
-it prints exactly what it would do to each side without writing anything. Especially
-worth it if either list already has items, since the first sync unions them.
+**Do a dry run first** — it prints exactly what it would do to each side without
+writing anything. Worth it whenever either list already has items, because the first
+sync unions them:
+
+```bash
+helm install mealie-gkeep-sync deploy/mealie-gkeep-sync \
+  --set image.repository=ghcr.io/you/mealie-gkeep-sync \
+  --set mealie.baseUrl=http://mealie.mealie.svc.cluster.local:9000 \
+  --set mealie.listName=Groceries \
+  --set google.email=you@gmail.com \
+  --set google.keepListName=Groceries \
+  --set secrets.existingSecret=mealie-gkeep-sync-creds \
+  --set sync.dryRun=true
+```
+
+Read the logs, then `helm upgrade` with `--set sync.dryRun=false` to go live. For
+anything beyond a couple of overrides, keep a values file instead:
+
+```bash
+helm upgrade --install mealie-gkeep-sync deploy/mealie-gkeep-sync -f my-values.yaml
+```
+
+The chart refuses to render rather than deploying something that cannot work: missing
+credentials or account identity, no list selector, an unknown conflict strategy, or a
+`replicaCount` above 1 (concurrent syncers race on the same list pair and the same
+ReadWriteOnce volume). `values.schema.json` additionally rejects misspelled keys, so a
+typo fails at install instead of silently doing nothing. Set `replicaCount=0` to pause
+syncing without uninstalling.
+
+See `deploy/mealie-gkeep-sync/values.yaml` for every option; the table below maps them
+to the environment variables the app actually reads.
 
 ---
 
 ## Configuration
 
-| Variable | Default | Meaning |
-|---|---|---|
-| `MEALIE_BASE_URL` | *required* | Root URL of the Mealie instance |
-| `MEALIE_API_TOKEN` | *required* | Mealie API token |
-| `MEALIE_LIST_ID` | — | Target list UUID (takes precedence) |
-| `MEALIE_LIST_NAME` | — | Target list name; one of ID/name is required |
-| `MEALIE_VERIFY_SSL` | `true` | Set false only for self-signed internal certs |
-| `MEALIE_TIMEOUT_SECONDS` | `30` | HTTP timeout |
-| `GOOGLE_EMAIL` | *required* | Account owning the Keep list |
-| `GOOGLE_MASTER_TOKEN` | *required* | From `tools/get_master_token.py` |
-| `KEEP_LIST_NAME` | *required* | Title of the Keep list |
-| `KEEP_CREATE_LIST_IF_MISSING` | `false` | Create the list if absent |
-| `SYNC_INTERVAL_SECONDS` | `60` | Poll interval (both sides require polling) |
-| `CONFLICT_STRATEGY` | `newest` | `newest` \| `mealie` \| `keep` |
-| `PARSE_INGREDIENTS` | `true` | Structure Keep text via Mealie's parser |
-| `PARSER_MIN_CONFIDENCE` | `0.6` | Below this, fall back to a plain note |
-| `CREATE_MISSING_FOODS` | `false` | Let unrecognised text create food records |
-| `DRY_RUN` | `false` | Log the plan, write nothing |
-| `STATE_DIR` | `/data` | Where state files live |
-| `HEALTH_PORT` | `8080` | Health endpoint port |
-| `LOG_LEVEL` | `INFO` | |
-| `LOG_FORMAT` | `json` | `json` \| `text` |
+Environment variables are what the app reads; the chart sets them for you.
+
+| Variable | Helm value | Default | Meaning |
+|---|---|---|---|
+| `MEALIE_BASE_URL` | `mealie.baseUrl` | *required* | Root URL of the Mealie instance |
+| `MEALIE_API_TOKEN` | `secrets.mealieApiToken` | *required* | Mealie API token |
+| `MEALIE_LIST_ID` | `mealie.listId` | — | Target list UUID (takes precedence) |
+| `MEALIE_LIST_NAME` | `mealie.listName` | — | Target list name; one of ID/name is required |
+| `MEALIE_VERIFY_SSL` | `mealie.verifySsl` | `true` | Set false only for self-signed internal certs |
+| `MEALIE_TIMEOUT_SECONDS` | `mealie.timeoutSeconds` | `30` | HTTP timeout |
+| `GOOGLE_EMAIL` | `google.email` | *required* | Account owning the Keep list |
+| `GOOGLE_MASTER_TOKEN` | `secrets.googleMasterToken` | *required* | From `tools/get_master_token.py` |
+| `KEEP_LIST_NAME` | `google.keepListName` | *required* | Title of the Keep list |
+| `KEEP_CREATE_LIST_IF_MISSING` | `google.createListIfMissing` | `false` | Create the list if absent |
+| `SYNC_INTERVAL_SECONDS` | `sync.intervalSeconds` | `60` | Poll interval (both sides require polling) |
+| `CONFLICT_STRATEGY` | `sync.conflictStrategy` | `newest` | `newest` \| `mealie` \| `keep` |
+| `PARSE_INGREDIENTS` | `sync.parseIngredients` | `true` | Structure Keep text via Mealie's parser |
+| `PARSER_MIN_CONFIDENCE` | `sync.parserMinConfidence` | `0.6` | Below this, fall back to a plain note |
+| `CREATE_MISSING_FOODS` | `sync.createMissingFoods` | `false` | Let unrecognised text create food records |
+| `DRY_RUN` | `sync.dryRun` | `false` | Log the plan, write nothing |
+| `STATE_DIR` | *fixed at /data* | `/data` | Where state files live |
+| `HEALTH_PORT` | `health.port` | `8080` | Health endpoint port |
+| `LOG_LEVEL` | `logging.level` | `INFO` | |
+| `LOG_FORMAT` | `logging.format` | `json` | `json` \| `text` |
 
 `CONFLICT_STRATEGY=newest` compares modification timestamps and falls back to Mealie when
 either side does not report one.
@@ -208,7 +238,7 @@ point, because it asserts the process stays up, `/healthz` stays 200, `/readyz` 
 | Dependency CVEs | pip-audit | any finding fails |
 | Python SAST | Bandit (medium+) | any finding fails |
 | Dockerfile lint | hadolint | warning+ fails |
-| Manifest misconfig | Trivy config | HIGH/CRITICAL fails |
+| Manifest misconfig | Trivy config, on the Helm-rendered output | HIGH/CRITICAL fails |
 | Image CVEs | Trivy image | fixable HIGH/CRITICAL fails |
 | SBOM | Syft (SPDX) | artifact |
 
