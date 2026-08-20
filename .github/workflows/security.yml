@@ -95,13 +95,13 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Hadolint
-        uses: hadolint/hadolint-action@v3.1.0
+        uses: hadolint/hadolint-action@v3.4.0
         with:
           dockerfile: Dockerfile
           failure-threshold: warning
 
       - name: Trivy config scan
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: config
           scan-ref: .
@@ -128,7 +128,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Trivy image scan
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: mealie-gkeep-sync:scan
           severity: HIGH,CRITICAL
@@ -138,7 +138,7 @@ jobs:
 
       - name: Trivy full report (informational)
         if: always()
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: mealie-gkeep-sync:scan
           severity: MEDIUM,HIGH,CRITICAL
@@ -156,7 +156,7 @@ jobs:
           category: trivy-image
 
       - name: Generate SBOM
-        uses: anchore/sbom-action@v0
+        uses: anchore/sbom-action@v0.24.0
         with:
           image: mealie-gkeep-sync:scan
           format: spdx-json
