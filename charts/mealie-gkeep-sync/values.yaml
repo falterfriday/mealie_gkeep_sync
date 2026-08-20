@@ -1,5 +1,5 @@
 image:
-  repository: ghcr.io/REPLACE_ME/mealie-gkeep-sync
+  repository: ghcr.io/falterfriday/mealie-gkeep-sync
   tag: ""
   pullPolicy: IfNotPresent
 

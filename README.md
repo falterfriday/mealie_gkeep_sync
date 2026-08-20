@@ -123,7 +123,7 @@ result starts with `aas_et/`.
 
 ### 3. Deploy the Helm chart
 
-The chart lives at `deploy/mealie-gkeep-sync`. Create the Secret out of band so no
+The chart lives at `charts/mealie-gkeep-sync`. Create the Secret out of band so no
 credential passes through values or your release history:
 
 ```bash
@@ -137,8 +137,7 @@ writing anything. Worth it whenever either list already has items, because the f
 sync unions them:
 
 ```bash
-helm install mealie-gkeep-sync deploy/mealie-gkeep-sync \
-  --set image.repository=ghcr.io/you/mealie-gkeep-sync \
+helm install mealie-gkeep-sync charts/mealie-gkeep-sync \
   --set mealie.baseUrl=http://mealie.mealie.svc.cluster.local:9000 \
   --set mealie.listName=Groceries \
   --set google.email=you@gmail.com \
@@ -151,7 +150,7 @@ Read the logs, then `helm upgrade` with `--set sync.dryRun=false` to go live. Fo
 anything beyond a couple of overrides, keep a values file instead:
 
 ```bash
-helm upgrade --install mealie-gkeep-sync deploy/mealie-gkeep-sync -f my-values.yaml
+helm upgrade --install mealie-gkeep-sync charts/mealie-gkeep-sync -f my-values.yaml
 ```
 
 The chart refuses to render rather than deploying something that cannot work: missing
@@ -161,8 +160,102 @@ ReadWriteOnce volume). `values.schema.json` additionally rejects misspelled keys
 typo fails at install instead of silently doing nothing. Set `replicaCount=0` to pause
 syncing without uninstalling.
 
-See `deploy/mealie-gkeep-sync/values.yaml` for every option; the table below maps them
+See `charts/mealie-gkeep-sync/values.yaml` for every option; the table below maps them
 to the environment variables the app actually reads.
+
+### Installing from the published Helm repository
+
+Once the chart has been released (see below), it can be installed without cloning:
+
+```bash
+helm repo add mealie-gkeep-sync https://falterfriday.github.io/mealie_gkeep_sync
+helm repo update
+helm install mealie-gkeep-sync mealie-gkeep-sync/mealie-gkeep-sync -f my-values.yaml
+```
+
+### Publishing a chart release
+
+`.github/workflows/chart-release.yml` runs [chart-releaser] on every push to `main`
+that touches `charts/**`. It packages each chart, creates a GitHub Release for it, and
+updates `index.yaml` on the `gh-pages` branch.
+
+Two one-time steps are manual, and the workflow cannot do them for you:
+
+```bash
+# 1. Create the empty orphan branch chart-releaser publishes into
+git checkout --orphan gh-pages
+git rm -rf .
+git commit --allow-empty -m "Initialise gh-pages"
+git push origin gh-pages
+git checkout main
+```
+
+2. **Settings → Pages → Deploy from a branch → `gh-pages` / root.** GitHub Pages on a
+   private repository requires a paid plan; on the free tier the repository must be
+   public for the Helm repo URL to serve. If that does not suit, publishing the chart
+   as an OCI artifact to GHCR (`helm push` to `oci://ghcr.io/...`) works for private
+   repositories and needs no `gh-pages` branch at all.
+
+**Bump `version:` in `Chart.yaml` for every chart change.** chart-releaser publishes a
+given version once and skips it thereafter, so an unbumped change merges cleanly and
+publishes nothing, silently. CI enforces this on pull requests: any diff under
+`charts/` without a version increase fails the build. `version` tracks the chart;
+`appVersion` tracks the application image and moves independently.
+
+[chart-releaser]: https://github.com/helm/chart-releaser-action
+
+### Publishing the image
+
+`.github/workflows/image-release.yml` publishes to
+`ghcr.io/<owner>/mealie-gkeep-sync`:
+
+| Trigger | Tags produced |
+|---|---|
+| push to `main` | `main`, `sha-<short>` — a moving edge build |
+| push tag `vX.Y.Z` | `X.Y.Z`, `X.Y`, `latest` |
+
+Built for **linux/amd64 and linux/arm64**, so it runs on an arm64 homelab node as well
+as x86. Verified locally: the arm64 image builds under QEMU in roughly two minutes and
+starts correctly.
+
+The image is **scanned before it is pushed**, not after. A vulnerable image that is
+already published cannot be un-published, and consumers may have pulled it, so the
+Trivy gate runs against a locally loaded amd64 build first and the push only happens
+if it passes. The multi-arch push reuses the same cached layers.
+
+Each published image is **signed with cosign** using keyless OIDC, so there is no
+private key to store or rotate. Verify one with:
+
+```bash
+cosign verify ghcr.io/falterfriday/mealie-gkeep-sync:latest \
+  --certificate-identity-regexp='^https://github.com/falterfriday/mealie_gkeep_sync/' \
+  --certificate-oidc-issuer=https://token.actions.githubusercontent.com
+```
+
+Provenance and SBOM attestations are attached to every push.
+
+**The GHCR package starts out private.** After the first publish, go to the package on
+GitHub → *Package settings* → change visibility to public, otherwise cluster nodes get
+`denied` on pull and you will need an `imagePullSecret` and
+`image.pullSecrets` in the chart values.
+
+#### Keeping chart and image versions in step
+
+They are deliberately separate: `version` in `Chart.yaml` is the chart, `appVersion` is
+the application. The chart's `image.tag` defaults to `appVersion`, so a release is
+normally two coordinated edits — bump `appVersion` to the new image version and bump
+`version` because the chart changed. Tag the repo `vX.Y.Z` to publish that image
+version.
+
+Both halves are enforced:
+
+- **Pull requests**: any change under `charts/` without a `version` increase fails CI,
+  because chart-releaser publishes a version once and then skips it silently.
+- **Tag pushes**: `vX.Y.Z` must match `appVersion` exactly, or the image build fails
+  before it starts. Otherwise you would publish image `X.Y.Z` while the chart still
+  pulls the previous version — an install that looks fine and quietly runs old code.
+
+So the release sequence is: bump both fields in one PR, merge it, then tag.
 
 ---
 
@@ -220,7 +313,7 @@ two syncers against the same list.
 
 ## CI and security scanning
 
-Three workflows in `.github/workflows/`:
+Five workflows in `.github/workflows/`:
 
 **`ci.yml`** — ruff, `mypy --strict` and pytest across Python 3.12 (the floor in
 `pyproject.toml`) and 3.13 (what the image ships), then builds the image and smoke tests
@@ -229,6 +322,12 @@ tmpfs `/tmp`, all capabilities dropped. The smoke test runs with `--network none
 never makes outbound auth attempts to Google; the resulting connection failure is the
 point, because it asserts the process stays up, `/healthz` stays 200, `/readyz` returns
 503, and SIGTERM still exits 0.
+
+It also lints and renders the Helm chart, validates the output against real Kubernetes
+API schemas with kubeconform, asserts the rendered Deployment still carries every
+operational invariant (single replica, `Recreate`, read-only root filesystem, probe
+paths, config checksum), and round-trips the chart's guard rails: six unsafe value
+combinations must be rejected and five supported ones must render.
 
 **`security.yml`** — on every PR and weekly on a schedule:
 
@@ -247,6 +346,12 @@ failure is a leaked `GOOGLE_MASTER_TOKEN`, which is account-wide access rather t
 scoped key.
 
 **`codeql.yml`** — GitHub's own SAST with `security-extended`.
+
+**`chart-release.yml`** — packages and publishes `charts/**` to the `gh-pages` Helm
+repository after a change lands on `main`. See *Publishing a chart release* above.
+
+**`image-release.yml`** — builds and publishes the container image to GHCR. See
+*Publishing the image* below.
 
 Findings gate the build via **exit codes**, so the pipeline works on public and private
 repos alike. SARIF upload to the Security tab is best-effort (`continue-on-error`)

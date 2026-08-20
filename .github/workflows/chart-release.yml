@@ -1,0 +1,52 @@
+name: Release chart
+
+# Publishes charts/* to the gh-pages Helm repository. Runs only after a change
+# lands on main, so pull requests never publish.
+#
+# One-time setup, both manual (see README):
+#   1. create an orphan `gh-pages` branch
+#   2. Settings > Pages > deploy from branch `gh-pages`
+on:
+  push:
+    branches: [main]
+    paths:
+      - "charts/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Never let two releases race to rewrite index.yaml on gh-pages.
+  group: chart-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Package and publish
+    runs-on: ubuntu-latest
+    permissions:
+      # Needed to create the GitHub Release and push the index to gh-pages.
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # chart-releaser compares tags across history to decide what is new.
+          fetch-depth: 0
+
+      - name: Configure git identity
+        run: |
+          git config user.name "$GITHUB_ACTOR"
+          git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
+
+      - uses: azure/setup-helm@v5.0.1
+
+      - name: Run chart-releaser
+        uses: helm/chart-releaser-action@v1.7.0
+        with:
+          charts_dir: charts
+          # Makes re-runs idempotent: a chart whose version already has a release
+          # is skipped instead of failing the workflow.
+          skip_existing: true
+        env:
+          CR_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
