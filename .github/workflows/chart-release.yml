@@ -41,6 +41,23 @@ jobs:
 
       - uses: azure/setup-helm@v5.0.1
 
+      - name: Ensure the gh-pages branch exists
+        run: |
+          # chart-releaser checks out origin/gh-pages to update index.yaml and fails
+          # with "fatal: invalid reference: origin/gh-pages" if the branch is absent.
+          # Create it as an empty root commit using plumbing, so nothing is checked
+          # out and the packaged charts in .cr-release-packages survive untouched.
+          if git ls-remote --exit-code --heads origin gh-pages >/dev/null 2>&1; then
+            echo "gh-pages already exists."
+            exit 0
+          fi
+
+          echo "gh-pages is missing; creating it."
+          empty_tree="$(git hash-object -t tree /dev/null)"
+          commit="$(git commit-tree "${empty_tree}" -m 'Initialise gh-pages for chart releases')"
+          git push origin "${commit}:refs/heads/gh-pages"
+          echo "Created gh-pages. Enable Settings > Pages on this branch to serve the repo over HTTPS."
+
       - name: Run chart-releaser
         uses: helm/chart-releaser-action@v1.7.0
         with:
