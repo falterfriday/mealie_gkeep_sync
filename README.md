@@ -179,22 +179,19 @@ helm install mealie-gkeep-sync mealie-gkeep-sync/mealie-gkeep-sync -f my-values.
 that touches `charts/**`. It packages each chart, creates a GitHub Release for it, and
 updates `index.yaml` on the `gh-pages` branch.
 
-Two one-time steps are manual, and the workflow cannot do them for you:
+The workflow creates the `gh-pages` branch itself if it is missing — as an empty root
+commit pushed via git plumbing, so nothing is checked out and the packaged charts
+survive. Without it, chart-releaser fails with `fatal: invalid reference:
+origin/gh-pages`.
 
-```bash
-# 1. Create the empty orphan branch chart-releaser publishes into
-git checkout --orphan gh-pages
-git rm -rf .
-git commit --allow-empty -m "Initialise gh-pages"
-git push origin gh-pages
-git checkout main
-```
+One step remains manual: **Settings → Pages → Deploy from a branch → `gh-pages` /
+root.** Creating the branch is enough for chart-releaser to publish; enabling Pages is
+what makes the Helm repo URL actually serve over HTTPS.
 
-2. **Settings → Pages → Deploy from a branch → `gh-pages` / root.** GitHub Pages on a
-   private repository requires a paid plan; on the free tier the repository must be
-   public for the Helm repo URL to serve. If that does not suit, publishing the chart
-   as an OCI artifact to GHCR (`helm push` to `oci://ghcr.io/...`) works for private
-   repositories and needs no `gh-pages` branch at all.
+GitHub Pages on a private repository requires a paid plan; on the free tier the
+repository must be public for the Helm repo URL to work. If that does not suit,
+publishing the chart as an OCI artifact to GHCR (`helm push` to `oci://ghcr.io/...`)
+works for private repositories and needs no `gh-pages` branch at all.
 
 **Bump `version:` in `Chart.yaml` for every chart change.** chart-releaser publishes a
 given version once and skips it thereafter, so an unbumped change merges cleanly and
