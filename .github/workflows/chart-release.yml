@@ -3,7 +3,7 @@ name: Release chart
 # Publishes charts/* to the gh-pages Helm repository. Runs only after a change
 # lands on main, so pull requests never publish.
 #
-# One-time setup, both manual (see README):
+# One-time setup, both manual (see docs/RELEASING.md):
 #   1. create an orphan `gh-pages` branch
 #   2. Settings > Pages > deploy from branch `gh-pages`
 on:
