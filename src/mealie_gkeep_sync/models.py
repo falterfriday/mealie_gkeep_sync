@@ -60,7 +60,12 @@ class MealieShoppingList(_MealieModel):
 
 
 class MealieItem(_MealieModel):
-    """A Mealie shopping list item as returned by the API."""
+    """A Mealie shopping list item as returned by the API.
+
+    Note there is no ``is_food`` field here, because Mealie has no such field: an item is
+    a structured food when ``food``/``food_id`` are set, and free text otherwise. A model
+    field named ``is_food`` would quietly default to False on every real payload.
+    """
 
     id: str
     shopping_list_id: str
@@ -68,7 +73,8 @@ class MealieItem(_MealieModel):
     position: int = 0
     quantity: float = 1
     note: str | None = None
-    is_food: bool = False
+    #: Mealie computes this from quantity + unit + food + note. Deliberately unused for
+    #: rendering (it embeds the amounts we strip), but kept for logs and debugging.
     display: str | None = None
     food_id: str | None = None
     unit_id: str | None = None

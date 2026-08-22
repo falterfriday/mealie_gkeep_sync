@@ -81,7 +81,7 @@ def test_fetch_items_keeps_raw_payload(client: MealieClient) -> None:
         "shoppingListId": "list-1",
         "checked": False,
         "note": "Milk",
-        "isFood": False,
+        "foodId": None,
         "extras": {KEEP_ID_EXTRA: "k1"},
         "recipeReferences": [{"recipeId": "r1"}],
     }
@@ -159,5 +159,6 @@ class TestBuildUpdatePayload:
 
     def test_overrides_apply(self) -> None:
         item = mealie_item("m1", note="old")
-        payload = build_update_payload(item, overrides={"note": "new", "isFood": False})
+        payload = build_update_payload(item, overrides={"note": "new", "foodId": None})
         assert payload["note"] == "new"
+        assert payload["foodId"] is None

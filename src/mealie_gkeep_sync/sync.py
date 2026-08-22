@@ -2,11 +2,12 @@
 
 One design point worth stating up front: **Mealie is the canonical renderer**. When text
 authored in Keep is imported and Mealie parses it into a structured item, the way Mealie
-renders that item back may differ from what the user typed ("2lb chicken" ->
-"2 lb Chicken breast"). We push that canonical text back to Keep *within the same cycle*
-and store it as the merge base, so both sides converge immediately. Storing the raw Keep
-text as the base instead would make the next cycle see a phantom Mealie-side edit, and
-storing it only on the Mealie side would ping-pong forever.
+renders that item back differs from what the user typed - amounts are stripped, so
+"2lb chicken" becomes "Chicken breast" in Keep while Mealie keeps the 2 lb. We push that
+canonical text back to Keep *within the same cycle* and store it as the merge base, so
+both sides converge immediately. Storing the raw Keep text as the base instead would make
+the next cycle see a phantom Mealie-side edit, and storing it only on the Mealie side
+would ping-pong forever.
 """
 
 from __future__ import annotations
@@ -233,6 +234,9 @@ class Syncer:
                     parsed=parse,
                     min_confidence=self._settings.parser_min_confidence,
                     food_id=self._food_id_for(parse),
+                    # Keep shows no amounts, so a rename there carries none either.
+                    # Pass the existing item so its quantity and unit survive the edit.
+                    current=action.item,
                 )
                 text_changed[action.item.id] = action.text
 
