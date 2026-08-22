@@ -27,7 +27,6 @@ def mealie_item(
     display: str | None = None,
     checked: bool = False,
     quantity: float = 1,
-    is_food: bool = False,
     food: MealieFood | None = None,
     unit: MealieUnit | None = None,
     keep_id: str | None = None,
@@ -42,9 +41,14 @@ def mealie_item(
         quantity=quantity,
         note=note,
         display=display,
-        is_food=is_food,
+        # Mealie has no "is food" flag: an item is a food exactly when it has a food
+        # record, so the fixture must not invent one either.
         food=food,
         unit=unit,
+        # Real Mealie payloads carry both the nested object and its id, so the fixture
+        # must too - code that reads food_id/unit_id would otherwise see None here.
+        food_id=food.id if food else None,
+        unit_id=unit.id if unit else None,
         extras=extras,
         updated_at=BASE_TIME + timedelta(minutes=updated_offset),
     )
