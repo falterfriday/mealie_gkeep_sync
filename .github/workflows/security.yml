@@ -95,7 +95,7 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Hadolint
-        uses: hadolint/hadolint-action@v3.4.0
+        uses: hadolint/hadolint-action@v3.5.0
         with:
           dockerfile: Dockerfile
           failure-threshold: warning
@@ -179,7 +179,7 @@ jobs:
           category: trivy-image
 
       - name: Generate SBOM
-        uses: anchore/sbom-action@v0.24.0
+        uses: anchore/sbom-action@v0.24.2
         with:
           image: mealie-gkeep-sync:scan
           format: spdx-json
