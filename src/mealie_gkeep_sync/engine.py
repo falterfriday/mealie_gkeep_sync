@@ -149,8 +149,15 @@ def plan_sync(
     links: list[Link],
     *,
     strategy: ConflictStrategy = ConflictStrategy.NEWEST,
+    absorbed: dict[str, str] | None = None,
 ) -> Plan:
-    """Compute the actions that bring both sides into agreement."""
+    """Compute the actions that bring both sides into agreement.
+
+    ``absorbed`` maps Keep IDs that Mealie merged into an existing item (rather than
+    creating) to the text they were absorbed for. Re-creating those would make Mealie
+    merge them again and inflate the target item's quantity on every cycle, so they are
+    skipped until their text changes.
+    """
     plan = Plan()
 
     by_mealie_id = {item.id: item for item in mealie_items}
@@ -181,7 +188,9 @@ def plan_sync(
         linked_keep.add(link.keep_id)
         _reconcile_pair(plan, link, mealie_item, keep_item, strategy)
 
-    _plan_unlinked(plan, mealie_items, keep_items, linked_mealie, linked_keep, strategy)
+    _plan_unlinked(
+        plan, mealie_items, keep_items, linked_mealie, linked_keep, strategy, absorbed or {}
+    )
     return plan
 
 
@@ -283,6 +292,7 @@ def _plan_unlinked(
     linked_mealie: set[str],
     linked_keep: set[str],
     strategy: ConflictStrategy,
+    absorbed: dict[str, str],
 ) -> None:
     """Handle items with no link: new on one side, or a link to be rebuilt from extras."""
     keep_by_id = {item.id: item for item in keep_items}
@@ -323,6 +333,14 @@ def _plan_unlinked(
         text = normalise_text(keep_item.text)
         if not text:
             continue
+        if absorbed.get(keep_item.id) == text:
+            # Mealie merged this into an existing item last time. Creating it again
+            # would merge again and add to that item's quantity, every cycle.
+            log.debug(
+                "Skipping Keep item Mealie previously absorbed",
+                extra={"keep_id": keep_item.id, "text": text},
+            )
+            continue
         plan.mealie_creates.append(
             CreateMealie(keep_id=keep_item.id, text=text, checked=keep_item.checked)
         )
@@ -338,11 +356,17 @@ def _reconcile_without_base(
     mealie_text = normalise_text(render_item(mealie_item))
     keep_text = normalise_text(keep_item.text)
 
+    # This pair was found *through* the Mealie item's extras, so they already hold this
+    # Keep ID and re-stamping them writes a value that is already there. Production was
+    # issuing 24 such no-op updates every cycle before this guard.
+    keep_id_fix = keep_item.id if mealie_item.linked_keep_id != keep_item.id else None
+
     if mealie_text == keep_text and mealie_item.checked == keep_item.checked:
+        if keep_id_fix:
+            plan.mealie_updates.append(UpdateMealie(item=mealie_item, keep_id=keep_id_fix))
         plan.surviving_links.append(
             Link(mealie_item.id, keep_item.id, text=mealie_text, checked=mealie_item.checked)
         )
-        plan.mealie_updates.append(UpdateMealie(item=mealie_item, keep_id=keep_item.id))
         return
 
     side = _winner(strategy, mealie_item.updated_at, keep_item.updated_at)
@@ -351,10 +375,11 @@ def _reconcile_without_base(
 
     if side == "mealie":
         plan.keep_updates.append(UpdateKeep(keep_item.id, text=text, checked=checked))
-        plan.mealie_updates.append(UpdateMealie(item=mealie_item, keep_id=keep_item.id))
+        if keep_id_fix:
+            plan.mealie_updates.append(UpdateMealie(item=mealie_item, keep_id=keep_id_fix))
     else:
         plan.mealie_updates.append(
-            UpdateMealie(item=mealie_item, text=text, checked=checked, keep_id=keep_item.id)
+            UpdateMealie(item=mealie_item, text=text, checked=checked, keep_id=keep_id_fix)
         )
 
     plan.surviving_links.append(
