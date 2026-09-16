@@ -62,6 +62,11 @@ class LinkStore:
     def __init__(self, path: Path) -> None:
         self._path = path
         self._links: dict[str, Link] = {}
+        #: Keep items Mealie merged into an existing entry instead of creating, mapped to
+        #: the text they were absorbed for. Without this the engine would re-create them
+        #: every cycle and Mealie would re-merge, inflating the target's quantity forever.
+        #: Keyed on text so editing the Keep item makes it eligible again.
+        self.absorbed: dict[str, str] = {}
         self.mealie_list_id: str | None = None
         self.keep_list_id: str | None = None
 
@@ -81,6 +86,11 @@ class LinkStore:
 
         self.mealie_list_id = data.get("mealie_list_id")
         self.keep_list_id = data.get("keep_list_id")
+        # Absent in state files written before absorbed-item tracking existed. Defaulting
+        # rather than bumping STATE_VERSION keeps existing links intact on upgrade.
+        raw_absorbed = data.get("absorbed")
+        if isinstance(raw_absorbed, dict):
+            self.absorbed = {str(k): str(v) for k, v in raw_absorbed.items()}
         for entry in data.get("links", []):
             try:
                 link = Link.from_json(entry)
@@ -98,6 +108,7 @@ class LinkStore:
                 "version": STATE_VERSION,
                 "mealie_list_id": self.mealie_list_id,
                 "keep_list_id": self.keep_list_id,
+                "absorbed": dict(self.absorbed),
                 "links": [link.to_json() for link in self._links.values()],
             },
         )
@@ -123,6 +134,7 @@ class LinkStore:
                 },
             )
             self._links.clear()
+            self.absorbed.clear()
 
         self.mealie_list_id = mealie_list_id
         self.keep_list_id = keep_list_id
@@ -142,3 +154,14 @@ class LinkStore:
 
     def replace_all(self, links: list[Link]) -> None:
         self._links = {link.mealie_id: link for link in links}
+
+    # -- absorbed items ----------------------------------------------------
+
+    def record_absorbed(self, absorbed: dict[str, str]) -> None:
+        self.absorbed.update(absorbed)
+
+    def prune_absorbed(self, live_keep_ids: set[str]) -> None:
+        """Forget absorbed Keep items that no longer exist."""
+        self.absorbed = {
+            keep_id: text for keep_id, text in self.absorbed.items() if keep_id in live_keep_ids
+        }

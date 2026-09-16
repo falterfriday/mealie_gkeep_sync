@@ -90,6 +90,7 @@ class Syncer:
             keep_items,
             self._links.links,
             strategy=self._settings.conflict_strategy,
+            absorbed=self._links.absorbed,
         )
 
         if self._settings.dry_run:
@@ -104,14 +105,19 @@ class Syncer:
             return SyncOutcome(ok=True, summary=plan.summary())
 
         log.info("Applying sync plan", extra=plan.summary())
-        new_links = self._apply(plan, mealie_items)
+        new_links, absorbed = self._apply(plan, mealie_items)
         self._links.replace_all(new_links)
+        self._links.record_absorbed(absorbed)
+        # Drop absorbed entries whose Keep item is gone, so the set cannot grow forever.
+        self._links.prune_absorbed({item.id for item in keep_items})
         self._links.save()
         return SyncOutcome(ok=True, summary=plan.summary())
 
     # -- apply -------------------------------------------------------------
 
-    def _apply(self, plan: Plan, mealie_items: list[MealieItem]) -> list[Link]:
+    def _apply(
+        self, plan: Plan, mealie_items: list[MealieItem]
+    ) -> tuple[list[Link], dict[str, str]]:
         links_by_mealie: dict[str, Link] = {
             link.mealie_id: link for link in plan.surviving_links
         }
@@ -158,23 +164,32 @@ class Syncer:
         update_parses = parsed[len(plan.mealie_creates) :]
 
         # 5. Mealie creates, followed by convergence of the canonical text back to Keep.
-        self._apply_mealie_creates(plan, create_parses, links_by_mealie)
+        absorbed = self._apply_mealie_creates(plan, create_parses, links_by_mealie)
 
         # 6. Mealie updates.
         self._apply_mealie_updates(plan, update_parses, links_by_mealie, update_payloads)
 
         # 7. One flush for every Keep mutation queued above.
         self._keep.flush()
-        return list(links_by_mealie.values())
+        return list(links_by_mealie.values()), absorbed
 
     def _apply_mealie_creates(
         self,
         plan: Plan,
         parses: list[ParsedIngredient | None],
         links_by_mealie: dict[str, Link],
-    ) -> None:
+    ) -> dict[str, str]:
+        """Create Keep-authored items in Mealie and link what comes back.
+
+        Returns the Keep items Mealie *absorbed* into an existing entry rather than
+        creating, mapped to the text they were absorbed for.
+
+        Matching is by the Keep ID stamped into ``extras``, never by position. Mealie's
+        bulk create merges - within the batch and into pre-existing unchecked items - so
+        the response is neither the same length as the request nor index-aligned with it.
+        """
         if not plan.mealie_creates:
-            return
+            return {}
 
         payloads: list[dict[str, Any]] = []
         for action, parse in zip(plan.mealie_creates, parses, strict=False):
@@ -190,30 +205,53 @@ class Syncer:
                 )
             )
 
-        created = self._mealie.create_items(payloads)
-        if len(created) != len(plan.mealie_creates):
-            log.warning(
-                "Mealie created a different number of items than requested",
-                extra={"requested": len(plan.mealie_creates), "created": len(created)},
-            )
+        returned = self._mealie.create_items(payloads)
+        by_keep_id = {
+            item.linked_keep_id: item for item in returned if item.linked_keep_id
+        }
 
-        for index, item in enumerate(created):
-            # Prefer the round-tripped extras; fall back to positional order.
-            keep_id = item.linked_keep_id
-            if not keep_id and index < len(plan.mealie_creates):
-                keep_id = plan.mealie_creates[index].keep_id
-            if not keep_id:
-                log.warning("Created Mealie item has no Keep link", extra={"mealie_id": item.id})
+        absorbed: dict[str, str] = {}
+        for action in plan.mealie_creates:
+            item = by_keep_id.get(action.keep_id)
+
+            if item is None:
+                # Mealie folded this into an existing item and kept that item's extras,
+                # so nothing came back carrying our ID.
+                absorbed[action.keep_id] = action.text
+                log.warning(
+                    "Mealie merged this item into an existing one; leaving it unlinked",
+                    extra={"keep_id": action.keep_id, "text": action.text},
+                )
+                continue
+
+            claimed = links_by_mealie.get(item.id)
+            if claimed is not None and claimed.keep_id != action.keep_id:
+                # Two Keep lines collapsed onto one Mealie item. Keep the first link:
+                # stealing it would leave the other Keep item unlinked, re-created next
+                # cycle, merged again, and the Mealie quantity would climb every sync.
+                absorbed[action.keep_id] = action.text
+                log.warning(
+                    "Two Keep items map to one Mealie item; leaving the duplicate unlinked",
+                    extra={
+                        "keep_id": action.keep_id,
+                        "text": action.text,
+                        "mealie_id": item.id,
+                        "linked_keep_id": claimed.keep_id,
+                    },
+                )
                 continue
 
             canonical = normalise_text(render_item(item))
-            original = plan.mealie_creates[index].text if index < len(plan.mealie_creates) else ""
-            if canonical and canonical != original:
-                self._keep.update_item(keep_id, text=canonical)
-            text = canonical or original
+            if canonical and canonical != action.text:
+                self._keep.update_item(action.keep_id, text=canonical)
             links_by_mealie[item.id] = Link(
-                mealie_id=item.id, keep_id=keep_id, text=text, checked=item.checked
+                mealie_id=item.id,
+                keep_id=action.keep_id,
+                text=canonical or action.text,
+                checked=item.checked,
             )
+
+        return absorbed
 
     def _apply_mealie_updates(
         self,

@@ -160,21 +160,40 @@ class MealieClient:
 
     # -- writes ------------------------------------------------------------
 
+    def _parse_items(self, raws: list[dict[str, Any]]) -> list[MealieItem]:
+        items: list[MealieItem] = []
+        for raw in raws:
+            item = MealieItem.model_validate(raw)
+            item.raw = raw
+            items.append(item)
+        return items
+
+    @staticmethod
+    def _collection(response: Any, camel: str, snake: str) -> list[dict[str, Any]]:
+        payload = response or {}
+        return payload.get(camel) or payload.get(snake) or []
+
     def create_items(self, payloads: list[dict[str, Any]]) -> list[MealieItem]:
+        """Create items, returning everything the request produced.
+
+        Mealie's bulk create *merges*: it consolidates duplicates within the batch and
+        folds items into pre-existing unchecked entries whose food (or note) and unit
+        match. Absorbed items come back under ``updatedItems``, not ``createdItems``, so
+        reading only the latter loses them - and a Keep item that was absorbed would then
+        never be linked, get re-created on the next cycle, and inflate the Mealie item's
+        quantity every single sync.
+        """
         if not payloads:
             return []
         response = self._json(
             "POST", f"/api/{self.prefix}/shopping/items/create-bulk", json=payloads
         )
-        created = (response or {}).get("createdItems", []) or (response or {}).get(
-            "created_items", []
+        return self._parse_items(
+            [
+                *self._collection(response, "createdItems", "created_items"),
+                *self._collection(response, "updatedItems", "updated_items"),
+            ]
         )
-        result: list[MealieItem] = []
-        for raw in created:
-            item = MealieItem.model_validate(raw)
-            item.raw = raw
-            result.append(item)
-        return result
 
     def update_items(self, payloads: list[dict[str, Any]]) -> list[MealieItem]:
         if not payloads:
