@@ -63,7 +63,7 @@ jobs:
           owner="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
           echo "name=ghcr.io/${owner}/mealie-gkeep-sync" >> "$GITHUB_OUTPUT"
 
-      - uses: docker/setup-qemu-action@v4.2.0
+      - uses: docker/setup-qemu-action@v4.3.0
 
       - uses: docker/setup-buildx-action@v4
 
