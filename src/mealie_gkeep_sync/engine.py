@@ -30,7 +30,7 @@ ticking it off on the other is not a conflict.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 
 from .config import ConflictStrategy
@@ -157,8 +157,13 @@ def plan_sync(
     creating) to the text they were absorbed for. Re-creating those would make Mealie
     merge them again and inflate the target item's quantity on every cycle, so they are
     skipped until their text changes.
+
+    Duplicate Keep lines are collapsed first, case-insensitively, so Mealie only ever
+    sees one of them.
     """
     plan = Plan()
+
+    keep_items = _combine_keep_duplicates(plan, keep_items, links)
 
     by_mealie_id = {item.id: item for item in mealie_items}
     by_keep_id = {item.id: item for item in keep_items}
@@ -204,6 +209,16 @@ def _reconcile_pair(
     mealie_text = normalise_text(render_item(mealie_item))
     keep_text = normalise_text(keep_item.text)
     base_text = normalise_text(link.text)
+
+    # An empty value on either side carries no information, so neither is ever treated
+    # as an edit. A Mealie item with no food record and no note renders to "", and
+    # pushing that would blank the line the user sees in Keep; a Keep line cleared mid-
+    # edit (or by a slip) would likewise wipe the Mealie item's content. Deleting an
+    # item is the gesture that means "remove this", and it is handled separately.
+    if not mealie_text:
+        mealie_text = base_text
+    if not keep_text:
+        keep_text = base_text
 
     text, text_target = _resolve_field(
         base_text, mealie_text, keep_text, strategy, mealie_item.updated_at, keep_item.updated_at
@@ -385,3 +400,77 @@ def _reconcile_without_base(
     plan.surviving_links.append(
         Link(mealie_item.id, keep_item.id, text=text, checked=checked)
     )
+
+
+def _combine_keep_duplicates(
+    plan: Plan,
+    keep_items: list[KeepItem],
+    links: list[Link],
+) -> list[KeepItem]:
+    """Collapse case-insensitive duplicate Keep lines down to one, before syncing.
+
+    Adding "milk" to a list that already says "Milk" should not produce a second Mealie
+    item - Mealie would merge them anyway and the spare Keep line would linger forever.
+
+    Only *unlinked* duplicates are removed. Deleting a linked line would orphan its Mealie
+    counterpart, which the next cycle would faithfully re-create in Keep: a new loop in
+    place of the old one. Two linked lines sharing a name is also legitimate - since only
+    the food name crosses over, "1 cup Basil" and "2 tbsp Basil" both read as "Basil" -
+    so that case is left strictly alone.
+    """
+    linked_keep_ids = {link.keep_id for link in links}
+
+    groups: dict[str, list[KeepItem]] = {}
+    for item in keep_items:
+        text = normalise_text(item.text)
+        if text:
+            groups.setdefault(text.casefold(), []).append(item)
+
+    removed: set[str] = set()
+    replacements: dict[str, KeepItem] = {}
+
+    for group in groups.values():
+        if len(group) < 2:
+            continue
+
+        linked = [item for item in group if item.id in linked_keep_ids]
+        if len(linked) > 1:
+            log.debug(
+                "Duplicate Keep lines are both linked; leaving them alone",
+                extra={"text": normalise_text(group[0].text), "count": len(linked)},
+            )
+            continue
+
+        survivor = linked[0] if linked else group[0]
+        duplicates = [
+            item
+            for item in group
+            if item.id != survivor.id and item.id not in linked_keep_ids
+        ]
+        if not duplicates:
+            continue
+
+        for duplicate in duplicates:
+            plan.keep_deletes.append(DeleteKeep(duplicate.id))
+            removed.add(duplicate.id)
+
+        log.info(
+            "Combined duplicate Keep items",
+            extra={
+                "text": normalise_text(survivor.text),
+                "removed": len(duplicates),
+                "kept": survivor.id,
+            },
+        )
+
+        # Re-adding an item that was already ticked off means it is wanted again, so the
+        # survivor is un-ticked rather than silently swallowing the request.
+        if survivor.checked and any(not duplicate.checked for duplicate in duplicates):
+            plan.keep_updates.append(UpdateKeep(survivor.id, checked=False))
+            replacements[survivor.id] = replace(survivor, checked=False)
+
+    if not removed and not replacements:
+        return keep_items
+    return [
+        replacements.get(item.id, item) for item in keep_items if item.id not in removed
+    ]

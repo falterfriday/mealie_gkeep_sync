@@ -179,6 +179,19 @@ plain note, which keeps typos out of your food database. Renaming in Keep preser
 quantity, unit and note that Keep cannot show — unless you type an amount (`3 tbsp basil`),
 which wins.
 
+**Duplicate Keep lines are combined** before anything reaches Mealie, ignoring case — add
+`milk` to a list that already says `Milk` and you end up with one line, not two items in
+Mealie. Only *unlinked* duplicates are removed: deleting a linked line would orphan its
+Mealie item, which would then be re-created in Keep on the next cycle. Two linked lines
+sharing a name are left alone, because that is legitimate — only the food name crosses
+over, so `1 cup Basil` and `2 tbsp Basil` both read as `Basil`. Re-adding something you had
+already ticked off un-ticks it, since you evidently want it again.
+
+**Blank text is never propagated.** An empty value on either side carries no information,
+so it is never treated as an edit: a Mealie item with no food record and no note will not
+blank the line you see in Keep, and a Keep line cleared mid-edit will not wipe the Mealie
+item's contents. Deleting an item is the gesture that means "remove this".
+
 **State** lives on a small PVC: the ID links plus gkeepapi's node cache. Each Mealie item
 also carries its Keep ID in Mealie's `extras`, so losing the volume rebuilds links from
 Mealie rather than duplicating everything. The residual risk is that items deleted while
