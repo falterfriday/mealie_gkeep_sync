@@ -253,82 +253,73 @@ def test_client_returns_created_and_updated(payload_key: str) -> None:
 
 
 class TestProductionOscillation:
-    """Reproduces the exact failure seen in production.
+    """The production failure, and the two layers that now prevent it.
 
     Mealie item 449b6734… alternated between Keep items cbx.al1beu21ezw8 and
-    cbx.kifakouvaztn on every cycle: two Keep lines with the same text collapsed onto one
+    cbx.kifakouvaztn every cycle: two Keep lines with the same text collapsed onto one
     Mealie item, so whichever was unlinked got re-created, Mealie re-merged it, the extras
-    flipped, and the item's quantity climbed every cycle.
+    flipped, and the quantity climbed.
+
+    Duplicate combining now resolves that *before* anything is created. The absorbed
+    mechanism remains the backstop for merges combining cannot predict: Mealie merges on
+    food ID and unit compatibility, so two Keep lines with genuinely different text can
+    still land on the same item.
     """
 
     MEALIE_ID = "449b6734-f6a3-46d5-bd08-792fb3b062b9"
     KEEP_A = "cbx.al1beu21ezw8"
     KEEP_B = "cbx.kifakouvaztn"
 
-    def _keep_list(self):
-        # Both Keep lines carry the same text - that is why Mealie merges them.
-        return [keep_item(self.KEEP_A, "Bananas"), keep_item(self.KEEP_B, "Bananas")]
-
-    def test_without_state_both_keep_items_want_creating(self) -> None:
-        """Baseline: one Mealie item, two Keep lines, so one of them is always spare."""
+    def test_identical_duplicates_never_reach_mealie(self) -> None:
+        """First layer: the exact production case, now handled by combining."""
         mealie = [mealie_item(self.MEALIE_ID, note="Bananas", keep_id=self.KEEP_A)]
-        plan = plan_sync(mealie, self._keep_list(), [])
-        # A relinks via extras; B has nowhere to go and would be created.
-        assert [c.keep_id for c in plan.mealie_creates] == [self.KEEP_B]
+        keep = [keep_item(self.KEEP_A, "Bananas"), keep_item(self.KEEP_B, "Bananas")]
+        plan = plan_sync(mealie, keep, [link(self.MEALIE_ID, self.KEEP_A, "Bananas")])
 
-    def test_merge_collision_is_absorbed_not_stolen(self, tmp_path) -> None:
-        mealie_items = [mealie_item(self.MEALIE_ID, note="Bananas", keep_id=self.KEEP_A)]
-        plan = plan_sync(mealie_items, self._keep_list(), [])
+        assert plan.mealie_creates == [], "combining should pre-empt the create entirely"
+        assert [d.keep_id for d in plan.keep_deletes] == [self.KEEP_B]
 
-        # Mealie merges B into the existing item and hands back its own extras overwritten.
-        returned = [mealie_item(self.MEALIE_ID, note="Bananas", keep_id=self.KEEP_B)]
-        fake = FakeMealie(returned)
-        links = {lnk.mealie_id: lnk for lnk in plan.surviving_links}
+    def test_differing_text_that_mealie_still_merges_is_absorbed(self, tmp_path) -> None:
+        """Second layer: combining cannot see this, because the texts differ."""
+        # "chicken" and "chicken breast" are distinct lines, but Mealie's parser maps
+        # both onto the same food and merges them.
+        keep = [keep_item("kA", "chicken"), keep_item("kB", "chicken breast")]
+        plan = plan_sync([], keep, [])
+        assert len(plan.mealie_creates) == 2, "combining leaves both alone"
+
+        # Mealie merges them: one item returns, carrying whichever extras won.
+        merged = mealie_item("m1", note="chicken breast", keep_id="kA")
+        fake = FakeMealie([merged])
+        links: dict[str, Any] = {}
 
         absorbed = _syncer(fake, FakeKeep(), LinkStore(tmp_path / "s.json"))._apply_mealie_creates(
-            plan, [None], links
+            plan, [None, None], links
         )
 
-        assert absorbed == {self.KEEP_B: "Bananas"}
-        assert links[self.MEALIE_ID].keep_id == self.KEEP_A, "must not steal the link"
+        assert links["m1"].keep_id == "kA"
+        assert absorbed == {"kB": "chicken breast"}, "the unmatched one must be absorbed"
 
-    def test_next_cycle_stops_recreating(self, tmp_path) -> None:
-        """The whole point: the second cycle must not call create again."""
-        mealie_items = [mealie_item(self.MEALIE_ID, note="Bananas", keep_id=self.KEEP_A)]
-        store = LinkStore(tmp_path / "s.json")
+    def test_absorbed_item_is_not_retried(self) -> None:
+        keep = [keep_item("kA", "chicken"), keep_item("kB", "chicken breast")]
+        plan = plan_sync([], keep, [], absorbed={"kB": "chicken breast"})
+        assert [c.keep_id for c in plan.mealie_creates] == ["kA"]
 
-        # Cycle 1
-        plan1 = plan_sync(mealie_items, self._keep_list(), [], absorbed=store.absorbed)
-        fake = FakeMealie([mealie_item(self.MEALIE_ID, note="Bananas", keep_id=self.KEEP_B)])
-        links1 = {lnk.mealie_id: lnk for lnk in plan1.surviving_links}
-        absorbed = _syncer(fake, FakeKeep(), store)._apply_mealie_creates(plan1, [None], links1)
-        store.replace_all(list(links1.values()))
-        store.record_absorbed(absorbed)
-
-        # Cycle 2, with the state cycle 1 produced.
-        plan2 = plan_sync(
-            mealie_items, self._keep_list(), store.links, absorbed=store.absorbed
-        )
-        assert plan2.mealie_creates == [], "the duplicate must not be re-created"
-        assert len(fake.create_calls) == 1, "no second create-bulk, so no further merging"
-
-    def test_quantity_cannot_inflate_across_many_cycles(self, tmp_path) -> None:
-        """Ten cycles, one create total - the inflation loop is closed."""
-        mealie_items = [mealie_item(self.MEALIE_ID, note="Bananas", keep_id=self.KEEP_A)]
+    def test_no_repeated_creates_across_many_cycles(self, tmp_path) -> None:
+        """Ten cycles, one create total - the inflation loop is closed either way."""
+        mealie = [mealie_item(self.MEALIE_ID, note="Bananas", keep_id=self.KEEP_A)]
+        keep = [keep_item(self.KEEP_A, "Bananas"), keep_item(self.KEEP_B, "Bananas")]
         store = LinkStore(tmp_path / "s.json")
         fake = FakeMealie([mealie_item(self.MEALIE_ID, note="Bananas", keep_id=self.KEEP_B)])
         syncer = _syncer(fake, FakeKeep(), store)
 
         for _ in range(10):
-            plan = plan_sync(
-                mealie_items, self._keep_list(), store.links, absorbed=store.absorbed
-            )
+            plan = plan_sync(mealie, keep, store.links, absorbed=store.absorbed)
             links = {lnk.mealie_id: lnk for lnk in plan.surviving_links}
             if plan.mealie_creates:
                 store.record_absorbed(syncer._apply_mealie_creates(plan, [None], links))
             store.replace_all(list(links.values()))
 
-        assert len(fake.create_calls) == 1, f"created {len(fake.create_calls)} times, expected 1"
+        assert fake.create_calls == [], f"expected no creates, got {len(fake.create_calls)}"
 
 
 class TestRelinkDoesNotChurn:

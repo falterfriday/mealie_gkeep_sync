@@ -206,7 +206,14 @@ class KeepClient:
             log.warning("Keep item vanished before update", extra={"keep_id": item_id})
             return
         if text is not None:
-            node.text = text
+            if not text.strip():
+                # Last line of defence: nothing upstream should ever ask for this, and
+                # blanking a line the user can see is worse than leaving it stale.
+                log.warning(
+                    "Refusing to blank a Keep item", extra={"keep_id": item_id}
+                )
+            else:
+                node.text = text
         if checked is not None:
             node.checked = checked
 

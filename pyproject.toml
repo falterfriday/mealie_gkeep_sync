@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mealie-gkeep-sync"
-version = "1.0.1"
+version = "1.1.0"
 description = "Bidirectional sync between a Mealie shopping list and a Google Keep list"
 readme = "README.md"
 requires-python = ">=3.12"
