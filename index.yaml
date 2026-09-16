@@ -2,6 +2,25 @@ apiVersion: v1
 entries:
   mealie-gkeep-sync:
   - apiVersion: v2
+    appVersion: 1.0.1
+    created: "2026-09-16T00:55:22.979327076Z"
+    description: Bidirectional sync between a Mealie shopping list and a Google Keep
+      list
+    digest: aa63c8d1cbaaf91de46984cb024ae2795d01180ffc83ae57cb632f5b37833a9d
+    home: https://github.com/falterfriday/mealie_gkeep_sync
+    keywords:
+    - mealie
+    - google-keep
+    - shopping-list
+    - sync
+    name: mealie-gkeep-sync
+    sources:
+    - https://github.com/falterfriday/mealie_gkeep_sync
+    type: application
+    urls:
+    - https://github.com/falterfriday/mealie_gkeep_sync/releases/download/mealie-gkeep-sync-1.0.1/mealie-gkeep-sync-1.0.1.tgz
+    version: 1.0.1
+  - apiVersion: v2
     appVersion: 1.0.0
     created: "2026-08-22T02:11:43.294496342Z"
     description: Bidirectional sync between a Mealie shopping list and a Google Keep
@@ -20,4 +39,4 @@ entries:
     urls:
     - https://github.com/falterfriday/mealie_gkeep_sync/releases/download/mealie-gkeep-sync-1.0.0/mealie-gkeep-sync-1.0.0.tgz
     version: 1.0.0
-generated: "2026-08-22T02:11:43.294501822Z"
+generated: "2026-09-16T00:55:22.9793361Z"
