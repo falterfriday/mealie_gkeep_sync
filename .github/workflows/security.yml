@@ -179,7 +179,7 @@ jobs:
           category: trivy-image
 
       - name: Generate SBOM
-        uses: anchore/sbom-action@v0.24.2
+        uses: anchore/sbom-action@v0.24.3
         with:
           image: mealie-gkeep-sync:scan
           format: spdx-json
