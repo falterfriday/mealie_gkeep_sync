@@ -59,7 +59,7 @@ jobs:
           echo "Created gh-pages. Enable Settings > Pages on this branch to serve the repo over HTTPS."
 
       - name: Run chart-releaser
-        uses: helm/chart-releaser-action@v1.7.0
+        uses: helm/chart-releaser-action@v1.9.0
         with:
           charts_dir: charts
           # Makes re-runs idempotent: a chart whose version already has a release
