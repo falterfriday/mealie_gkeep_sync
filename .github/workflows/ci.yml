@@ -173,7 +173,7 @@ jobs:
           # Needed to diff this PR against its base for the version check below.
           fetch-depth: 0
 
-      - uses: azure/setup-helm@v5.0.1
+      - uses: azure/setup-helm@v5.1.0
 
       - name: Chart changes require a Chart.yaml version bump
         if: github.event_name == 'pull_request'
