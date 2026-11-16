@@ -109,7 +109,7 @@ jobs:
           exit-code: "1"
           format: table
 
-      - uses: azure/setup-helm@v5.0.1
+      - uses: azure/setup-helm@v5.1.0
 
       - name: Render the Helm chart
         # The chart is scanned as rendered output rather than in place. Trivy renders
@@ -179,7 +179,7 @@ jobs:
           category: trivy-image
 
       - name: Generate SBOM
-        uses: anchore/sbom-action@v0.24.2
+        uses: anchore/sbom-action@v0.24.3
         with:
           image: mealie-gkeep-sync:scan
           format: spdx-json
